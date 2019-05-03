@@ -31,9 +31,9 @@ class ImageDataLoader:
     def get_batch(self):
         imgs = np.array([self.resize_img(misc.imread(x)) for x in self.filenames[self.idx:self.idx + self.batch_size]])
         self.idx += self.batch_size
-        if self.idx + self.batch_size   > self.N:
+        if self.idx + self.batch_size > self.N:
             self.new_epoch()
-        return imgs
+        return imgs.astype(np.float32)
 
     def resize_img(self, image):
         h, w, _ = image.shape
@@ -62,9 +62,10 @@ class DrawingDataLoader:
         self.idx += self.batch_size
         if self.idx + self.batch_size > self.N:
             self.new_epoch()
-        return imgs
+        return imgs.astype(np.float32)
 
     def resize_img(self, image):
         image = np.reshape(image, (28, 28))
         image = np.stack((image,)*3, axis=-1)
         return resize(image, self.res)
+
