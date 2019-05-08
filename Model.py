@@ -217,9 +217,6 @@ class CycleGan:
         cycle_x = self.g_YX(fake_y, training=True)
         cycle_y = self.g_XY(fake_x, training=True)
 
-        x_id = self.g_YX(img_x, training=True)
-        y_id = self.g_XY(img_y, training=True)
-
         self.d_X.trainable = False
         self.d_Y.trainable = False
 
@@ -228,14 +225,11 @@ class CycleGan:
 
         self.combined = Model(inputs=[img_x, img_y],
                               outputs=[v_x, v_y,
-                                       cycle_x, cycle_y,
-                                       x_id, y_id])
+                                       cycle_x, cycle_y])
         self.combined.compile(loss=['mse', 'mse',
-                                    'mae', 'mae',
                                     'mae', 'mae'],
                               loss_weights=[1, 1,
-                                            self.lambda_cycle, self.lambda_cycle,
-                                            self.lambda_id, self.lambda_id],
+                                            self.lambda_cycle, self.lambda_cycle],
                               optimizer=optimizer)
 
     def generator(self):
@@ -323,7 +317,7 @@ class CycleGan:
                 # Train Generators
                 g_loss = self.combined.train_on_batch([imgs_x, imgs_y],
                                                       [real, real,
-                                                       imgs_x, imgs_y, imgs_x, imgs_y])
+                                                       imgs_x, imgs_y])
                 elapsed_time = datetime.datetime.now() - start_time
 
                 # Plot progress
