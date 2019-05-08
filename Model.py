@@ -8,6 +8,8 @@ from tensorflow.keras.layers import UpSampling2D, Conv2D
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Lambda
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import load_model
+
 from tensorflow import keras
 
 import tensorflow as tf
@@ -21,6 +23,9 @@ from DataLoader import ImageDataLoader, DrawingDataLoader
 from tensorflow.keras.layers import Layer, InputSpec
 from tensorflow.keras import initializers, regularizers, constraints
 from tensorflow.keras import backend as K
+from tensorflow.keras.backend import clear_session
+import gc
+
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -165,12 +170,12 @@ class InstanceNormalization(Layer):
 
 
 class CycleGan:
-    def __init__(self, shape):
+    def __init__(self, shape, load=False, prefix=""):
         # 3 entry tuple
         self.shape = shape
 
         # Calculate output shape of patchgan discriminator
-        patch = int(self.shape[0] / 2 ** 2)
+        patch = int(self.shape[0] / 2 ** 4)
         self.disc_patch = (patch, patch, 1)
 
         # Beginning number of filters
@@ -186,6 +191,14 @@ class CycleGan:
         # Create and compile discriminators
         self.d_X = self.discriminator()
         self.d_Y = self.discriminator()
+        self.g_XY = self.generator()
+        self.g_YX = self.generator()
+
+        if load:
+            self.g_XY = load_model(prefix + 'gy.h5', custom_objects={'InstanceNormalization': InstanceNormalization})
+            self.g_YX = load_model(prefix + 'gx.h5', custom_objects={'InstanceNormalization': InstanceNormalization})
+            self.d_X = load_model(prefix + 'dx.h5', custom_objects={'InstanceNormalization': InstanceNormalization})
+            self.d_Y = load_model(prefix + 'dy.h5', custom_objects={'InstanceNormalization': InstanceNormalization})
         self.d_X.compile(loss='mse',
                          optimizer=optimizer,
                          metrics=['accuracy'])
@@ -193,26 +206,25 @@ class CycleGan:
                          optimizer=optimizer,
                          metrics=['accuracy'])
 
-        self.g_XY = self.generator()
-        self.g_YX = self.generator()
+
 
         img_x = Input(shape=self.shape)
         img_y = Input(shape=self.shape)
 
-        fake_y = self.g_XY(img_x)
-        fake_x = self.g_YX(img_y)
+        fake_y = self.g_XY(img_x, training=True)
+        fake_x = self.g_YX(img_y, training=True)
 
-        cycle_x = self.g_YX(fake_y)
-        cycle_y = self.g_XY(fake_x)
+        cycle_x = self.g_YX(fake_y, training=True)
+        cycle_y = self.g_XY(fake_x, training=True)
 
-        x_id = self.g_YX(img_x)
-        y_id = self.g_XY(img_y)
+        x_id = self.g_YX(img_x, training=True)
+        y_id = self.g_XY(img_y, training=True)
 
         self.d_X.trainable = False
         self.d_Y.trainable = False
 
-        v_x = self.d_X(fake_x)
-        v_y = self.d_Y(fake_y)
+        v_x = self.d_X(fake_x, training=True)
+        v_y = self.d_Y(fake_y, training=True)
 
         self.combined = Model(inputs=[img_x, img_y],
                               outputs=[v_x, v_y,
@@ -244,10 +256,14 @@ class CycleGan:
 
         x1 = conv(inputs, self.g_filters)
         x2 = conv(x1, self.g_filters * 2)
+        x3 = conv(x2, self.g_filters * 4)
+        x4 = conv(x3, self.g_filters * 8)
 
-        y1 = deConv(x2, x1, self.g_filters)
-        y2 = UpSampling2D(size=2)(y1)
-        outIm = Conv2D(3, kernel_size=4, strides=1, padding='same', activation='tanh')(y2)
+        y1 = deConv(x4, x3, self.g_filters*4)
+        y2 = deConv(y1, x2, self.g_filters*2)
+        y3 = deConv(y2, x1, self.g_filters)
+        y4 = UpSampling2D(size=2)(y3)
+        outIm = Conv2D(3, kernel_size=4, strides=1, padding='same', activation='tanh')(y4)
 
         return Model(inputs, outIm)
 
@@ -263,12 +279,16 @@ class CycleGan:
 
         x1 = conv(inputs, self.g_filters)
         x2 = conv(x1, self.g_filters * 2)
+        x3 = conv(x2, self.g_filters * 4)
+        x4 = conv(x3, self.g_filters * 8)
 
-        y = Conv2D(1, kernel_size=4, strides=1, padding='same')(x2)
+        y = Conv2D(1, kernel_size=4, strides=1, padding='same')(x4)
 
         return Model(inputs, y)
 
-    def train(self, epochs, batch_size=1):
+    def train(self, epochs, batch_size=1, batches=0, prefix=""):
+
+
         start_time = datetime.datetime.now()
 
         real = np.ones((batch_size,) + self.disc_patch)
@@ -277,15 +297,17 @@ class CycleGan:
         print(real.shape)
         imageSet = ImageDataLoader(batch_size, res=(self.shape[0], self.shape[1]))
         drawingSet = DrawingDataLoader('flower', batch_size, res=(self.shape[0], self.shape[1]))
+        if batches == 0:
+            batches = drawingSet.N
         for epoch in range(epochs):
-            for batch_i in range(drawingSet.N):
+            for batch_i in range(batches):
                 print("fetching data")
                 imgs_x = drawingSet.get_batch()
                 imgs_y = imageSet.get_batch()
                 print("done fetching data")
                 # Train Discriminators
-                fake_y = self.g_XY(imgs_x)
-                fake_x = self.g_YX(imgs_y)
+                fake_y = self.g_XY(imgs_x, training=True)
+                fake_x = self.g_YX(imgs_y, training=True)
 
                 # Calculate losses
                 dX_real_loss = self.d_X.train_on_batch(imgs_x, real)
@@ -315,13 +337,21 @@ class CycleGan:
                        np.mean(g_loss[3:5]),
                        np.mean(g_loss[5:6]),
                        elapsed_time))
-                if batch_i % 10 == 0:
-                    self.d_X.save("dxe%db%d.h5" % (epoch, batch_i))
-                    self.d_Y.save("dye%db%d.h5" % (epoch, batch_i))
-                    self.g_XY.save("gye%db%d.h5" % (epoch, batch_i))
-                    self.g_YX.save("gxe%db%d.h5" % (epoch, batch_i))
+
+        self.d_X.save(prefix + "dx.h5")
+        self.d_Y.save(prefix + "dy.h5")
+        self.g_XY.save(prefix + "gy.h5")
+        self.g_YX.save(prefix + "gx.h5")
 
 
 if __name__ == '__main__':
-    gan = CycleGan((16, 16, 3))
-    gan.train(epochs=1, batch_size=1)
+    gan = CycleGan((64, 64, 3))
+    gan.train(epochs=1, batch_size=1, batches=20, prefix='0')
+    for i in range(99999):
+        clear_session()
+        tf.reset_default_graph()
+        print("Starting stage %d" % i)
+        gan = CycleGan((64, 64, 3), load=True, prefix="%d" % (i))
+        gan.train(epochs=1, batch_size=1, batches=20,  prefix="%d" % (i+1))
+
+
